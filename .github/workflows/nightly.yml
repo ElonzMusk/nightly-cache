@@ -1,0 +1,68 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "45 21 * * 1-5"   # after the US close (1:45 PM PT standard time)
+    - cron: "15 10 * * 1-5"   # before the open (2:15 AM PT standard time)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "lab (tune signals) or scan (morning picks)"
+        type: choice
+        options: [lab, scan]
+        default: lab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Pick mode
+        id: m
+        run: |
+          if [ -n "${{ github.event.inputs.mode }}" ]; then echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.schedule }}" = "15 10 * * 1-5" ]; then echo "mode=scan" >> $GITHUB_OUTPUT
+          else echo "mode=lab" >> $GITHUB_OUTPUT; fi
+      - name: Check secrets
+        id: s
+        env:
+          K: ${{ secrets.SYNC_KEY }}
+          R: ${{ secrets.RAYDAR_READ }}
+        run: |
+          if [ -z "$K" ] || [ -z "$R" ]; then echo "Secrets SYNC_KEY and RAYDAR_READ are not set yet, nothing to do."; echo "go=0" >> $GITHUB_OUTPUT; else echo "go=1" >> $GITHUB_OUTPUT; fi
+      - uses: actions/checkout@v4
+        if: steps.s.outputs.go == '1'
+      - uses: actions/checkout@v4
+        if: steps.s.outputs.go == '1'
+        with:
+          repository: ElonzMusk/Ray-Dar
+          token: ${{ secrets.RAYDAR_READ }}
+          path: raydar
+      - uses: actions/setup-python@v5
+        if: steps.s.outputs.go == '1'
+        with:
+          python-version: "3.12"
+      - name: Run
+        if: steps.s.outputs.go == '1'
+        env:
+          SYNC_KEY: ${{ secrets.SYNC_KEY }}
+        run: |
+          pip install -q curl_cffi cryptography
+          python raydar/scripts/nightly.py ${{ steps.m.outputs.mode }} .
+      - name: Save results
+        if: steps.s.outputs.go == '1'
+        run: |
+          rm -rf raydar
+          git config user.name "nightly-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add out/*.bin 2>/dev/null || true
+          if git diff --cached --quiet; then echo "No changes."; exit 0; fi
+          git commit -q -m "update ${{ steps.m.outputs.mode }}"
+          for i in 1 2 3; do git pull -q --rebase && git push -q && exit 0; sleep 5; done; exit 1
