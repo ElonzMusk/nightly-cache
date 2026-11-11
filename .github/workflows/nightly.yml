@@ -4,16 +4,18 @@ on:
   schedule:
     - cron: "45 21 * * 1-5"   # after the US close (1:45 PM PT standard time)
     - cron: "15 10 * * 1-5"   # before the open (2:15 AM PT standard time)
+    - cron: "*/30 14-20 * * 1-5"  # quick scan every 30 min while the market is open (the script skips outside 9:30-4 ET)
   workflow_dispatch:
     inputs:
       mode:
         description: "lab (tune signals) or scan (morning picks)"
         type: choice
-        options: [lab, scan]
+        options: [lab, scan, quick]
         default: lab
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: nightly
@@ -22,13 +24,14 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
       - name: Pick mode
         id: m
         run: |
           if [ -n "${{ github.event.inputs.mode }}" ]; then echo "mode=${{ github.event.inputs.mode }}" >> $GITHUB_OUTPUT
           elif [ "${{ github.event.schedule }}" = "15 10 * * 1-5" ]; then echo "mode=scan" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event.schedule }}" = "*/30 14-20 * * 1-5" ]; then echo "mode=quick" >> $GITHUB_OUTPUT
           else echo "mode=lab" >> $GITHUB_OUTPUT; fi
       - name: Check secrets
         id: s
@@ -56,6 +59,11 @@ jobs:
         run: |
           pip install -q curl_cffi cryptography
           python raydar/scripts/nightly.py ${{ steps.m.outputs.mode }} .
+      - name: Keep the schedule awake
+        if: steps.s.outputs.go == '1' && steps.m.outputs.mode == 'lab'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/nightly.yml/enable" || echo "couldn't re-enable (fine if already enabled)"
       - name: Save results
         if: steps.s.outputs.go == '1'
         run: |
