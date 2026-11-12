@@ -10,7 +10,7 @@ on:
       mode:
         description: "lab (tune signals) or scan (morning picks)"
         type: choice
-        options: [lab, scan, quick]
+        options: [lab, scan, quick, signals]
         default: lab
 
 permissions:
@@ -57,7 +57,7 @@ jobs:
         env:
           SYNC_KEY: ${{ secrets.SYNC_KEY }}
         run: |
-          pip install -q curl_cffi cryptography
+          pip install -q curl_cffi cryptography numpy
           python raydar/scripts/nightly.py ${{ steps.m.outputs.mode }} .
       - name: Keep the schedule awake
         if: steps.s.outputs.go == '1' && steps.m.outputs.mode == 'lab'
