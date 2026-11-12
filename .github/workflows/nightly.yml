@@ -10,7 +10,7 @@ on:
       mode:
         description: "lab (tune signals) or scan (morning picks)"
         type: choice
-        options: [lab, scan, quick, signals]
+        options: [lab, scan, quick, signals, floats]
         default: lab
 
 permissions:
