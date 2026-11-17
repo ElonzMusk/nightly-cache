@@ -42,35 +42,45 @@ jobs:
           if [ -z "$K" ] || [ -z "$R" ]; then echo "Secrets SYNC_KEY and RAYDAR_READ are not set yet, nothing to do."; echo "go=0" >> $GITHUB_OUTPUT; else echo "go=1" >> $GITHUB_OUTPUT; fi
       - uses: actions/checkout@v4
         if: steps.s.outputs.go == '1'
-      - uses: actions/checkout@v4
+      # Ray starts a job himself when GitHub's schedule runs late; when the late scheduled run finally shows up, it skips
+      # instead of doing the same job twice. Markers: out/done/<mode>-<market day>.
+      - name: Already done today?
+        id: d
         if: steps.s.outputs.go == '1'
+        run: |
+          DAY=$(python3 -c "import datetime as d;u=d.datetime.now(d.timezone.utc);e=u-d.timedelta(hours=5);m='${{ steps.m.outputs.mode }}';e=e-d.timedelta(hours=16) if m=='lab' else e;print(e.date())")
+          echo "day=$DAY" >> $GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "schedule" ] && [ -f "out/done/${{ steps.m.outputs.mode }}-$DAY" ]; then echo "Ray already ran ${{ steps.m.outputs.mode }} for $DAY, skipping."; echo "skip=1" >> $GITHUB_OUTPUT; else echo "skip=0" >> $GITHUB_OUTPUT; fi
+      - uses: actions/checkout@v4
+        if: steps.s.outputs.go == '1' && steps.d.outputs.skip != '1'
         with:
           repository: ElonzMusk/Ray-Dar
           token: ${{ secrets.RAYDAR_READ }}
           path: raydar
       - uses: actions/setup-python@v5
-        if: steps.s.outputs.go == '1'
+        if: steps.s.outputs.go == '1' && steps.d.outputs.skip != '1'
         with:
           python-version: "3.12"
       - name: Run
-        if: steps.s.outputs.go == '1'
+        if: steps.s.outputs.go == '1' && steps.d.outputs.skip != '1'
         env:
           SYNC_KEY: ${{ secrets.SYNC_KEY }}
         run: |
           pip install -q curl_cffi cryptography numpy
           python raydar/scripts/nightly.py ${{ steps.m.outputs.mode }} .
+          if [ "${{ steps.m.outputs.mode }}" = "lab" ] || [ "${{ steps.m.outputs.mode }}" = "scan" ]; then mkdir -p out/done && date -u > "out/done/${{ steps.m.outputs.mode }}-${{ steps.d.outputs.day }}"; fi
       - name: Keep the schedule awake
-        if: steps.s.outputs.go == '1' && steps.m.outputs.mode == 'lab'
+        if: steps.s.outputs.go == '1' && steps.m.outputs.mode == 'lab' && steps.d.outputs.skip != '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/nightly.yml/enable" || echo "couldn't re-enable (fine if already enabled)"
       - name: Save results
-        if: steps.s.outputs.go == '1'
+        if: steps.s.outputs.go == '1' && steps.d.outputs.skip != '1'
         run: |
           rm -rf raydar
           git config user.name "nightly-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add out/*.bin 2>/dev/null || true
+          git add out/*.bin out/done 2>/dev/null || true
           if git diff --cached --quiet; then echo "No changes."; exit 0; fi
           git commit -q -m "update ${{ steps.m.outputs.mode }}"
           for i in 1 2 3; do git pull -q --rebase && git push -q && exit 0; sleep 5; done; exit 1
